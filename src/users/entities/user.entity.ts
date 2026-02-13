@@ -20,8 +20,9 @@ export class UserEntity extends AbstractBaseEntity {
   @Column()
   email!: string;
 
-  @Column({ nullable: true })
-  username!: string;
+  // DÜZELTME: nullable olduğu için string | null
+@Column({ type: 'varchar', nullable: true }) // Açıkça varchar olduğunu belirttik
+  username!: string | null;
 
   @Column({ select: false }) // Şifreyi asla default sorguda getirme
   password_hash!: string;
@@ -40,15 +41,18 @@ export class UserEntity extends AbstractBaseEntity {
   @Column({ default: false })
   two_factor_enabled!: boolean;
 
-  @Column({ nullable: true, select: false })
-  two_factor_secret!: string;
+  // DÜZELTME: nullable olduğu için string | null
+@Column({ type: 'varchar', nullable: true, select: false })
+  two_factor_secret!: string | null;
 
   // --- ŞİFRE SIFIRLAMA İÇİN YENİ ALANLAR ---
-  @Column({ nullable: true, select: false }) // Asla dışarı sızmamalı
-  password_reset_hash!: string;
+  // DÜZELTME: nullable olduğu için string | null
+@Column({ type: 'varchar', nullable: true, select: false })
+  password_reset_hash!: string | null;
 
+  // DÜZELTME: nullable olduğu için Date | null
   @Column({ type: 'timestamptz', nullable: true })
-  password_reset_expires_at!: Date;
+  password_reset_expires_at!: Date | null;
 
   // --- İLİŞKİLER ---
 
@@ -62,16 +66,22 @@ export class UserEntity extends AbstractBaseEntity {
 
   @OneToMany(() => AuditLogEntity, (log) => log.user)
   audit_logs!: AuditLogEntity[];
+
   // --- EMAIL 2FA (OTP) İÇİN YENİ ALANLAR ---
-  @Column({ nullable: true, select: false }) // Dışarı sızmasın
-  two_factor_otp_hash!: string;
+  // DÜZELTME: nullable olduğu için string | null
+@Column({ type: 'varchar', nullable: true, select: false })
+  two_factor_otp_hash!: string | null;
 
+  // DÜZELTME: nullable olduğu için Date | null
   @Column({ type: 'timestamptz', nullable: true })
-  two_factor_otp_expires_at!: Date;
+  two_factor_otp_expires_at!: Date | null;
+
   // --- E-POSTA DOĞRULAMA İÇİN YENİ ALANLAR ---
-  @Column({ nullable: true, select: false }) // Dışarı sızmasın
-  email_verification_hash!: string;
+  // DÜZELTME: nullable olduğu için string | null
+@Column({ type: 'varchar', nullable: true, select: false })
+  email_verification_hash!: string | null;
 
+  // DÜZELTME: nullable olduğu için Date | null
   @Column({ type: 'timestamptz', nullable: true })
-  email_verification_expires_at!: Date;
+  email_verification_expires_at!: Date | null;
 }

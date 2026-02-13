@@ -11,6 +11,7 @@ import { CommonModule } from './common/common.module';
 import { ScheduleModule } from '@nestjs/schedule';
 import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
 import { APP_GUARD } from '@nestjs/core';
+import { envValidationSchema } from './config/env.validation'; // <-- EKLENDİ
 
 @Module({
   imports: [
@@ -18,6 +19,11 @@ import { APP_GUARD } from '@nestjs/core';
     // 1. Önce ConfigModule yüklenmeli (isGlobal: true önemli)
     ConfigModule.forRoot({
       isGlobal: true,
+      validationSchema: envValidationSchema, // <-- EKLENDİ
+      validationOptions: {
+        allowUnknown: true, // Şemada olmayan diğer değişkenlere izin ver
+        abortEarly: true,   // İlk hatada dur
+      },
     }),
 
     // 2. Sonra Veritabanı Bağlantısı kurulmalı

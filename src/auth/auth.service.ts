@@ -11,6 +11,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import * as argon2 from 'argon2';
 import { v7 as uuidv7 } from 'uuid'; // Session ID ve Token Family için
+import { UAParser } from 'ua-parser-js';
 
 import { UserEntity, AccountStatus } from '../users/entities/user.entity';
 import { SessionEntity } from './entities/session.entity';
@@ -129,8 +130,8 @@ export class AuthService {
         throw new UnauthorizedException('Kullanıcı bulunamadı.');
       }
 
-      // 3. Kodun Süresi Dolmuş mu?
-      if (!user.two_factor_otp_expires_at || user.two_factor_otp_expires_at < new Date()) {
+      // 3. Kodun Süresi Dolmuş mu? (TS 'Object is possibly null' hatası önlemi eklendi)
+      if (!user.two_factor_otp_expires_at || user.two_factor_otp_expires_at.getTime() < Date.now()) {
         throw new UnauthorizedException('Güvenlik kodunun süresi dolmuş. Lütfen tekrar giriş yapın.');
       }
 
@@ -141,8 +142,8 @@ export class AuthService {
       }
 
       // 5. BAŞARILI! Kodu Temizle (Tek kullanımlık olmasını garanti altına al)
-      user.two_factor_otp_hash = null as any; // <-- TS Hatası önlemi eklendi
-      user.two_factor_otp_expires_at = null as any; // <-- TS Hatası önlemi eklendi
+      user.two_factor_otp_hash = null; 
+      user.two_factor_otp_expires_at = null; 
       await this.userRepository.save(user);
 
       // 6. Artık Gerçek Oturumu Başlatabiliriz
@@ -251,6 +252,19 @@ export class AuthService {
       session.ip_address = ip;
       session.user_agent = userAgent;
 
+      // --- YENİ: User-Agent Parçalama ---
+      const parser = new UAParser(userAgent);
+      const uaResult = parser.getResult();
+
+      session.device_info = {
+        browser: `${uaResult.browser.name || 'Bilinmeyen Tarayıcı'} ${uaResult.browser.version || ''}`.trim(),
+        os: `${uaResult.os.name || 'Bilinmeyen İşletim Sistemi'} ${uaResult.os.version || ''}`.trim(),
+        device: uaResult.device.model 
+          ? `${uaResult.device.vendor || ''} ${uaResult.device.model}`.trim() 
+          : 'Masaüstü Cihaz',
+        type: uaResult.device.type || 'desktop',
+      };
+
       await this.sessionRepository.save(session);
 
       return {
@@ -264,36 +278,42 @@ export class AuthService {
   }
 
   private async createSession(user: UserEntity, userAgent: string, ip: string) {
-    // A. Token Family ID oluştur (Reuse Detection için)
     const tokenFamily = uuidv7();
 
-    // B. Payload Hazırla
-    const payload = {
-      sub: user.id,
-      email: user.email,
-      family: tokenFamily, // Token ailesini payload'a gömüyoruz
+    // --- YENİ: User-Agent Parçalama ---
+    const parser = new UAParser(userAgent);
+    const uaResult = parser.getResult();
+
+    // Kullanıcı dostu cihaz bilgisi oluşturuyoruz
+    const deviceInfo = {
+      browser: `${uaResult.browser.name || 'Bilinmeyen Tarayıcı'} ${uaResult.browser.version || ''}`.trim(),
+      os: `${uaResult.os.name || 'Bilinmeyen İşletim Sistemi'} ${uaResult.os.version || ''}`.trim(),
+      device: uaResult.device.model 
+        ? `${uaResult.device.vendor || ''} ${uaResult.device.model}`.trim() 
+        : 'Masaüstü Cihaz',
+      type: uaResult.device.type || 'desktop',
     };
 
-    // C. Tokenları Üret
+    const payload = { sub: user.id, email: user.email, family: tokenFamily };
     const accessToken = this.jwtService.sign(payload, { expiresIn: '15m' });
     const refreshToken = this.jwtService.sign(payload, { expiresIn: '7d' });
-
-    // D. Refresh Token'ı Hashle (DB'de düz saklanmaz!)
     const refreshTokenHash = await argon2.hash(refreshToken);
 
-    // E. Session Tablosuna Kaydet (Cihaz Yönetimi İçin)
     const session = new SessionEntity();
     session.user = user;
     session.user_id = user.id;
     session.refresh_token_hash = refreshTokenHash;
     session.token_family = tokenFamily;
-    session.user_agent = userAgent; // Şimdilik ham string, ileride parser kullanırız
+    session.user_agent = userAgent;
+    
+    // --- YENİ: Parçalanmış veriyi JSONB alanına basıyoruz ---
+    session.device_info = deviceInfo;
+    
     session.ip_address = ip;
     session.expires_at = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000); // 7 Gün
 
     await this.sessionRepository.save(session);
 
-    // F. Kullanıcıya Dön
     return {
       accessToken,
       refreshToken,
@@ -406,7 +426,7 @@ export class AuthService {
       select: ['id', 'password_hash', 'password_reset_expires_at', 'security_stamp'],
     });
 
-    if (!user || user.password_reset_expires_at < new Date()) {
+    if (!user || !user.password_reset_expires_at || user.password_reset_expires_at.getTime() < Date.now()) {
       throw new UnauthorizedException('Şifre sıfırlama bağlantısı geçersiz veya süresi dolmuş.');
     }
 
@@ -414,8 +434,8 @@ export class AuthService {
     user.password_hash = await argon2.hash(newPassword);
 
     // 4. GÜVENLİK: Şifre değişti, eski oturumları patlat!
-    user.password_reset_hash = null as any; // <-- DÜZELTME BURADA
-    user.password_reset_expires_at = null as any; // <-- DÜZELTME BURADA
+    user.password_reset_hash = null; 
+    user.password_reset_expires_at = null; 
     user.security_stamp = uuidv7(); // Bu değiştiğinde tüm mevcut tokenlar geçersiz hale gelir!
 
     await this.userRepository.save(user);
@@ -440,8 +460,8 @@ export class AuthService {
       select: ['id', 'account_status', 'email_verification_expires_at'],
     });
 
-    // 3. Token geçersiz mi veya süresi dolmuş mu?
-    if (!user || user.email_verification_expires_at < new Date()) {
+    // 3. Token geçersiz mi veya süresi dolmuş mu? (TS hatası önlemi eklendi)
+    if (!user || !user.email_verification_expires_at || user.email_verification_expires_at.getTime() < Date.now()) {
       throw new BadRequestException('Doğrulama bağlantısı geçersiz veya süresi dolmuş.');
     }
 
@@ -452,8 +472,8 @@ export class AuthService {
 
     // 4. KİLİDİ AÇ (ACTIVE yap) ve tokenları temizle
     user.account_status = AccountStatus.ACTIVE;
-    user.email_verification_hash = null as any; // <-- TS Hatası önlemi
-    user.email_verification_expires_at = null as any; // <-- TS Hatası önlemi
+    user.email_verification_hash = null; 
+    user.email_verification_expires_at = null; 
 
     await this.userRepository.save(user);
 
