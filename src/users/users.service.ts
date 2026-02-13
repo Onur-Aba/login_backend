@@ -1,3 +1,4 @@
+import * as crypto from 'crypto'; // <-- EKLENDİ
 import {
   ConflictException,
   Injectable,
@@ -24,12 +25,19 @@ export class UsersService {
       // --- ADIM 1: Şifreyi Hashle ---
       const hashedPassword = await argon2.hash(createUserDto.password);
 
-      // --- ADIM 2: User Entity Hazırla ---
+      // --- ADIM 2: User Entity Hazırla (GÜNCELLEME) ---
       const user = new UserEntity();
       user.email = createUserDto.email;
+      user.username = createUserDto.username as any; // <-- DÜZELTME BURADA (TS Hatası önlemi)
       user.password_hash = hashedPassword;
-      user.account_status = AccountStatus.UNVERIFIED; // Mail onayı lazım
-      // security_stamp ve id otomatik oluşacak (AbstractBaseEntity)
+      user.account_status = AccountStatus.UNVERIFIED; // Baştan doğrulanmamış kabul ediyoruz
+
+      // 1. Doğrulama Token'ı Üret (24 saat geçerli)
+      const verificationToken = crypto.randomBytes(32).toString('hex');
+      const verificationTokenHash = crypto.createHash('sha256').update(verificationToken).digest('hex');
+      
+      user.email_verification_hash = verificationTokenHash;
+      user.email_verification_expires_at = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 Saat
 
       // Transaction içinde kaydet (Henüz DB'de görünmez, hafızada)
       const savedUser = await queryRunner.manager.save(UserEntity, user);
@@ -44,14 +52,14 @@ export class UsersService {
 
       await queryRunner.manager.save(ProfileEntity, profile);
 
-      // --- ADIM 4: Outbox (Dual Write Çözümü) ---
-      // Mail servisi çökse bile bu emir DB'ye yazılacak.
+      // --- ADIM 4: Outbox (GÜNCELLEME) ---
       const outboxEvent = new OutboxEntity();
-      outboxEvent.type = 'USER_REGISTERED';
+      outboxEvent.type = 'VERIFY_EMAIL'; // TİPİ DEĞİŞTİRDİK
       outboxEvent.payload = {
-        userId: savedUser.id,
         email: savedUser.email,
         name: `${profile.first_name} ${profile.last_name}`,
+        // Frontend URL'niz:
+        verifyLink: `https://senin-frontend.com/verify-email?token=${verificationToken}`, 
       };
       outboxEvent.status = OutboxStatus.PENDING;
 

@@ -4,6 +4,7 @@ import {
   UnauthorizedException,
   ForbiddenException,
   InternalServerErrorException,
+  BadRequestException, // <-- EKLENDİ
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -13,12 +14,13 @@ import { v7 as uuidv7 } from 'uuid'; // Session ID ve Token Family için
 
 import { UserEntity, AccountStatus } from '../users/entities/user.entity';
 import { SessionEntity } from './entities/session.entity';
-import { OutboxEntity, OutboxStatus } from '../outbox/entities/outbox.entity'; // <-- Eklendi
+import { OutboxEntity, OutboxStatus } from '../outbox/entities/outbox.entity'; 
 import { LoginDto } from '../auth/dto/login.dto';
-import { RefreshTokenDto } from './dto/refresh-token.dto'; // <-- Eksik olmaması için eklendi
-import { ForgotPasswordDto } from './dto/forgot-password.dto'; // <-- Eklendi
-import { ResetPasswordDto } from './dto/reset-password.dto'; // <-- Eklendi
-import { Verify2FaDto } from './dto/verify-2fa.dto'; // <-- EKLENDİ
+import { RefreshTokenDto } from './dto/refresh-token.dto'; 
+import { ForgotPasswordDto } from './dto/forgot-password.dto'; 
+import { ResetPasswordDto } from './dto/reset-password.dto'; 
+import { Verify2FaDto } from './dto/verify-2fa.dto'; 
+import { VerifyEmailDto } from './dto/verify-email.dto'; 
 
 @Injectable()
 export class AuthService {
@@ -40,6 +42,7 @@ export class AuthService {
     const user = await this.userRepository
       .createQueryBuilder('user')
       .addSelect('user.password_hash') // Şifre default hidden, burada lazım
+      .addSelect('user.account_status') // Statü kontrolü için gerekli
       .where('user.email = :identifier', { identifier })
       .orWhere('user.username = :identifier', { identifier })
       .getOne();
@@ -60,7 +63,11 @@ export class AuthService {
     if (user.account_status === AccountStatus.SUSPENDED) {
       throw new ForbiddenException('Hesabınız askıya alınmıştır.');
     }
-    // İstersen burada "UNVERIFIED" kontrolü de yapabilirsin.
+    
+    // YENİ EKLENEN KISIM: Doğrulanmamış hesapları kapıdan çevir
+    if (user.account_status === AccountStatus.UNVERIFIED) {
+      throw new ForbiddenException('Lütfen önce e-posta adresinize gönderilen linke tıklayarak hesabınızı doğrulayın.');
+    }
 
     // --- 2FA KONTROLÜ (ENTERPRISE MANTIĞI) ---
     if (user.two_factor_enabled) {
@@ -148,8 +155,20 @@ export class AuthService {
 
   // Kullanıcının 2FA'yı açıp kapatabilmesi için ayar metodu
   async toggle2Fa(userId: string, enable: boolean) {
+    // 1. Veritabanında 2FA durumunu güncelle
     await this.userRepository.update(userId, { two_factor_enabled: enable });
-    return { message: enable ? 'İki aşamalı doğrulama AKTİF edildi.' : 'İki aşamalı doğrulama KAPATILDI.' };
+
+    // 2. ENTERPRISE KURALI: 2FA açıldıysa acımadan tüm oturumları patlat!
+    if (enable) {
+      // Daha önce yazdığımız "Tüm Cihazlardan Çıkış Yap" metodunu tetikliyoruz
+      await this.logoutAllDevices(userId);
+      
+      return { 
+        message: 'İki aşamalı doğrulama AKTİF edildi. Güvenliğiniz için tüm oturumlarınız kapatıldı. Lütfen e-postanıza gelecek kod ile tekrar giriş yapın.' 
+      };
+    }
+
+    return { message: 'İki aşamalı doğrulama KAPATILDI.' };
   }
 
   async refreshToken(refreshTokenDto: RefreshTokenDto, ip: string, userAgent: string) {
@@ -405,5 +424,39 @@ export class AuthService {
     await this.logoutAllDevices(user.id);
 
     return { message: 'Şifreniz başarıyla güncellendi. Yeni şifrenizle giriş yapabilirsiniz.' };
+  }
+
+  // --- E-POSTA DOĞRULAMA İŞLEMİ ---
+
+  async verifyEmail(verifyEmailDto: VerifyEmailDto) {
+    const { token } = verifyEmailDto;
+
+    // 1. Gelen token'ı hashle
+    const hashedToken = crypto.createHash('sha256').update(token).digest('hex');
+
+    // 2. Veritabanında ara
+    const user = await this.userRepository.findOne({
+      where: { email_verification_hash: hashedToken },
+      select: ['id', 'account_status', 'email_verification_expires_at'],
+    });
+
+    // 3. Token geçersiz mi veya süresi dolmuş mu?
+    if (!user || user.email_verification_expires_at < new Date()) {
+      throw new BadRequestException('Doğrulama bağlantısı geçersiz veya süresi dolmuş.');
+    }
+
+    // Zaten onaylıysa
+    if (user.account_status === AccountStatus.ACTIVE) {
+      return { message: 'Hesabınız zaten doğrulanmış.' };
+    }
+
+    // 4. KİLİDİ AÇ (ACTIVE yap) ve tokenları temizle
+    user.account_status = AccountStatus.ACTIVE;
+    user.email_verification_hash = null as any; // <-- TS Hatası önlemi
+    user.email_verification_expires_at = null as any; // <-- TS Hatası önlemi
+
+    await this.userRepository.save(user);
+
+    return { message: 'E-posta adresiniz başarıyla doğrulandı. Artık giriş yapabilirsiniz.' };
   }
 }

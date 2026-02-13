@@ -54,6 +54,11 @@ export class OutboxService {
               event.payload.email,
               'Hoşgeldiniz! Hesabınız oluşturuldu.'
             );
+          } else if (event.type === 'VERIFY_EMAIL') {
+            await this.simulateSendEmail(
+              event.payload.email,
+              `Aramıza hoşgeldin ${event.payload.name}! Lütfen hesabınızı doğrulamak için şu linke tıklayın: ${event.payload.verifyLink}`
+            );
           } else if (event.type === 'PASSWORD_RESET_REQUESTED') {
             await this.simulateSendEmail(
               event.payload.email,

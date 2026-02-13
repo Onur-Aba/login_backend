@@ -9,6 +9,8 @@ import { OutboxModule } from './outbox/outbox.module';
 import { AuditLogsModule } from './audit_logs/audit_logs.module';
 import { CommonModule } from './common/common.module';
 import { ScheduleModule } from '@nestjs/schedule';
+import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
+import { APP_GUARD } from '@nestjs/core';
 
 @Module({
   imports: [
@@ -37,6 +39,17 @@ import { ScheduleModule } from '@nestjs/schedule';
       }),
     }),
 
+    // GÜVENLİK: İstek Sınırlandırma (Rate Limiting)
+    ThrottlerModule.forRoot([{
+      name: 'default', // Genel endpointler için (Örn: Profil getirme)
+      ttl: 60000,      // 60 saniye (Milisaniye cinsinden 60000)
+      limit: 100,      // 60 saniyede maksimum 100 istek
+    }, {
+      name: 'auth',    // Hassas Auth işlemleri için (Login, 2FA, Register)
+      ttl: 60000,      // 60 saniye
+      limit: 5,        // 60 saniyede SADECE 5 İSTEK (Brute force imkansızlaşır)
+    }]),
+
     // 3. En son Feature Modüller yüklenmeli
     CommonModule,
     UsersModule,
@@ -45,6 +58,13 @@ import { ScheduleModule } from '@nestjs/schedule';
     AuditLogsModule,
   ],
   controllers: [AppController],
-  providers: [AppService],
+  providers: [
+    AppService,
+    // Uygulamadaki TÜM endpointleri otomatik olarak default limite sokar
+    {
+      provide: APP_GUARD,
+      useClass: ThrottlerGuard,
+    },
+  ],
 })
 export class AppModule {}

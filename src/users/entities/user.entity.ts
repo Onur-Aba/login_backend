@@ -68,4 +68,10 @@ export class UserEntity extends AbstractBaseEntity {
 
   @Column({ type: 'timestamptz', nullable: true })
   two_factor_otp_expires_at!: Date;
+  // --- E-POSTA DOĞRULAMA İÇİN YENİ ALANLAR ---
+  @Column({ nullable: true, select: false }) // Dışarı sızmasın
+  email_verification_hash!: string;
+
+  @Column({ type: 'timestamptz', nullable: true })
+  email_verification_expires_at!: Date;
 }
