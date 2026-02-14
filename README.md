@@ -1,7 +1,7 @@
 # 🛡️ Enterprise Ready Authentication Backend
 
 <p align="center">
-  <a href="http://nestjs.com/" target="blank"><img src="https://raw.githubusercontent.com/nestjs/nest/master/docs/assets/logo-small.svg" width="120" alt="Nest Logo" /></a>
+  <a href="http://nestjs.com/" target="blank"><img src="https://docs.nestjs.com/assets/logo-small.svg" width="120" alt="Nest Logo" /></a>
 </p>
 
 <p align="center">
