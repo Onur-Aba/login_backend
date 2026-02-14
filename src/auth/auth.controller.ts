@@ -1,20 +1,22 @@
 import { Controller, Post, Body, Ip, Headers, HttpCode, HttpStatus, Get, UseGuards, Request } from '@nestjs/common';
-import { Throttle } from '@nestjs/throttler'; // <-- EKLENDİ
+import { Throttle } from '@nestjs/throttler'; 
 import { AuthService } from './auth.service';
 import { LoginDto } from './dto/login.dto';
-import { RefreshTokenDto } from './dto/refresh-token.dto'; // <-- EKLENDİ
-import { JwtAuthGuard } from './guards/jwt-auth.guard'; // Guard'ı çağır
+import { RefreshTokenDto } from './dto/refresh-token.dto'; 
+import { JwtAuthGuard } from './guards/jwt-auth.guard'; 
 import { ForgotPasswordDto } from './dto/forgot-password.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
 import { Verify2FaDto } from './dto/verify-2fa.dto';
 import { VerifyEmailDto } from './dto/verify-email.dto';
+import { RecaptchaGuard } from '../common/guards/recaptcha.guard'; // <-- YENİ: İçe aktarıldı
 
 @Controller('auth')
 export class AuthController {
   constructor(private readonly authService: AuthService) {}
 
   // GÜVENLİK: 1 dakikada sadece 5 deneme yapılabilir
-  @Throttle({ auth: { limit: 5, ttl: 60000 } })
+  @UseGuards(RecaptchaGuard) // <-- YENİ: Önce Bot kontrolü (Captcha) yapılır
+  @Throttle({ auth: { limit: 5, ttl: 60000 } }) // Sonra Hız Limiti kontrolü yapılır
   @Post('login')
   @HttpCode(HttpStatus.OK)
   login(
@@ -92,6 +94,7 @@ export class AuthController {
   toggle2Fa(@Request() req, @Body('enable') enable: boolean) {
     return this.authService.toggle2Fa(req.user.id, enable);
   }
+  
   @Throttle({ auth: { limit: 5, ttl: 60000 } })
   @Post('verify-email')
   @HttpCode(HttpStatus.OK)

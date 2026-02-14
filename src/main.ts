@@ -1,8 +1,10 @@
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
 import { ValidationPipe } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config'; // <-- ConfigService import edildi
+import { ConfigService } from '@nestjs/config'; 
 import helmet from 'helmet';
+import hpp from 'hpp';
+import { json, urlencoded } from 'express'; // <-- YENİ: Body-parser araçları
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
@@ -15,7 +17,16 @@ async function bootstrap() {
   // 1. HELMET: Temel HTTP güvenlik başlıklarını otomatik ayarlar.
   app.use(helmet());
 
-  // 2. KURUMSAL CORS AYARI: 
+  // 2. HPP (HTTP Parameter Pollution) Koruması: 
+  // ?id=1&id=2 gibi saldırıları engellemek için son parametreyi baz alır.
+  app.use(hpp());
+
+  // 3. PAYLOAD SIZE LIMITING (DoS Koruması):
+  // Sunucuyu yormamak adına gelen istek boyutunu 50kb ile sınırlandırıyoruz.
+  app.use(json({ limit: '50kb' }));
+  app.use(urlencoded({ extended: true, limit: '50kb' }));
+
+  // 4. KURUMSAL CORS AYARI: 
   // Dinamik olarak .env dosyasından beslenir.
   app.enableCors({
     // Eğer prod ortamındaysak sadece .env'deki domain, değilsek local ortamlar

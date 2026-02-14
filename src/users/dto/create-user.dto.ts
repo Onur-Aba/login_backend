@@ -29,4 +29,9 @@ export class CreateUserDto {
   @MinLength(3)
   @MaxLength(20)
   username?: string;
+
+  // YENİ: Captcha Token
+  @IsOptional()
+  @IsString()
+  recaptchaToken?: string;
 }
