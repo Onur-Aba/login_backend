@@ -1,7 +1,7 @@
 # 🛡️ Enterprise Ready Authentication Backend
 
 <p align="center">
-  <a href="[http://nestjs.com/](http://nestjs.com/)" target="blank"><img src="[https://nestjs.com/img/logo-small.svg](https://nestjs.com/img/logo-small.svg)" width="120" alt="Nest Logo" /></a>
+  <a href="http://nestjs.com/" target="blank"><img src="https://raw.githubusercontent.com/nestjs/nest/master/docs/assets/logo-small.svg" width="120" alt="Nest Logo" /></a>
 </p>
 
 <p align="center">
@@ -11,11 +11,11 @@
 </p>
 
 <p align="center">
-  <img src="[https://img.shields.io/badge/NestJS-E0234E?style=for-the-badge&logo=nestjs&logoColor=white](https://img.shields.io/badge/NestJS-E0234E?style=for-the-badge&logo=nestjs&logoColor=white)" alt="NestJS" />
-  <img src="[https://img.shields.io/badge/TypeScript-3178C6?style=for-the-badge&logo=typescript&logoColor=white](https://img.shields.io/badge/TypeScript-3178C6?style=for-the-badge&logo=typescript&logoColor=white)" alt="TypeScript" />
-  <img src="[https://img.shields.io/badge/PostgreSQL-4169E1?style=for-the-badge&logo=postgresql&logoColor=white](https://img.shields.io/badge/PostgreSQL-4169E1?style=for-the-badge&logo=postgresql&logoColor=white)" alt="PostgreSQL" />
-  <img src="[https://img.shields.io/badge/TypeORM-FE0C05?style=for-the-badge&logo=typeorm&logoColor=white](https://img.shields.io/badge/TypeORM-FE0C05?style=for-the-badge&logo=typeorm&logoColor=white)" alt="TypeORM" />
-  <img src="[https://img.shields.io/badge/Docker-2496ED?style=for-the-badge&logo=docker&logoColor=white](https://img.shields.io/badge/Docker-2496ED?style=for-the-badge&logo=docker&logoColor=white)" alt="Docker" />
+  <img src="https://img.shields.io/badge/NestJS-E0234E?style=for-the-badge&logo=nestjs&logoColor=white" alt="NestJS" />
+  <img src="https://img.shields.io/badge/TypeScript-3178C6?style=for-the-badge&logo=typescript&logoColor=white" alt="TypeScript" />
+  <img src="https://img.shields.io/badge/PostgreSQL-4169E1?style=for-the-badge&logo=postgresql&logoColor=white" alt="PostgreSQL" />
+  <img src="https://img.shields.io/badge/TypeORM-FE0C05?style=for-the-badge&logo=typeorm&logoColor=white" alt="TypeORM" />
+  <img src="https://img.shields.io/badge/Docker-2496ED?style=for-the-badge&logo=docker&logoColor=white" alt="Docker" />
 </p>
 
 ---
@@ -58,7 +58,7 @@ Ensure you have the following installed:
 
 ### 2. Clone the Repository
 ```bash
-git clone https://github.com/onur-aba/login_backend.git
+git clone [https://github.com/onur-aba/login_backend.git](https://github.com/onur-aba/login_backend.git)
 cd login_backend
 ```
 
@@ -93,7 +93,7 @@ JWT_REFRESH_SECRET=YOUR_SUPER_SECRET_REFRESH_KEY_HERE
 JWT_REFRESH_EXPIRATION=7d
 
 # --- GOOGLE RECAPTCHA v3 ---
-# Get keys from: https://www.google.com/recaptcha/admin
+# Get keys from: [https://www.google.com/recaptcha/admin](https://www.google.com/recaptcha/admin)
 RECAPTCHA_SECRET_KEY=YOUR_GOOGLE_SECRET_KEY
 ```
 
