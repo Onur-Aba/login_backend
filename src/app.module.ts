@@ -11,7 +11,8 @@ import { CommonModule } from './common/common.module';
 import { ScheduleModule } from '@nestjs/schedule';
 import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
 import { APP_GUARD } from '@nestjs/core';
-import { envValidationSchema } from './config/env.validation'; // <-- EKLENDİ
+import { envValidationSchema } from './config/env.validation';
+import { HealthModule } from './health/health.module'; // <-- YENİ IMPORT
 
 @Module({
   imports: [
@@ -19,7 +20,7 @@ import { envValidationSchema } from './config/env.validation'; // <-- EKLENDİ
     // 1. Önce ConfigModule yüklenmeli (isGlobal: true önemli)
     ConfigModule.forRoot({
       isGlobal: true,
-      validationSchema: envValidationSchema, // <-- EKLENDİ
+      validationSchema: envValidationSchema,
       validationOptions: {
         allowUnknown: true, // Şemada olmayan diğer değişkenlere izin ver
         abortEarly: true,   // İlk hatada dur
@@ -62,6 +63,7 @@ import { envValidationSchema } from './config/env.validation'; // <-- EKLENDİ
     AuthModule,
     OutboxModule,
     AuditLogsModule,
+    HealthModule, // <-- BURAYA EKLENDİ
   ],
   controllers: [AppController],
   providers: [

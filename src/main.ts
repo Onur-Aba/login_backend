@@ -4,7 +4,10 @@ import { ValidationPipe } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config'; 
 import helmet from 'helmet';
 import hpp from 'hpp';
-import { json, urlencoded } from 'express'; // <-- YENİ: Body-parser araçları
+import { json, urlencoded } from 'express';
+// YENİ IMPORTLAR:
+import compression from 'compression';
+import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
@@ -14,20 +17,34 @@ async function bootstrap() {
   const nodeEnv = configService.get<string>('NODE_ENV');
   const frontendUrl = configService.get<string>('FRONTEND_URL');
 
+  // --- SWAGGER KURULUMU (YENİ) ---
+  // Sadece Development ortamında açmak güvenlik için iyidir
+  if (nodeEnv !== 'production') {
+    const config = new DocumentBuilder()
+      .setTitle('Enterprise Auth API')
+      .setDescription('NestJS ile geliştirilmiş güvenli auth sistemi')
+      .setVersion('1.0')
+      .addBearerAuth() // JWT Token desteği
+      .build();
+    const document = SwaggerModule.createDocument(app, config);
+    SwaggerModule.setup('api/docs', app, document);
+  }
+
+  // --- RESPONSE COMPRESSION (YENİ) ---
+  // Gzip Sıkıştırma: API yanıt boyutunu küçültür
+  app.use(compression());
+
   // 1. HELMET: Temel HTTP güvenlik başlıklarını otomatik ayarlar.
   app.use(helmet());
 
   // 2. HPP (HTTP Parameter Pollution) Koruması: 
-  // ?id=1&id=2 gibi saldırıları engellemek için son parametreyi baz alır.
   app.use(hpp());
 
   // 3. PAYLOAD SIZE LIMITING (DoS Koruması):
-  // Sunucuyu yormamak adına gelen istek boyutunu 50kb ile sınırlandırıyoruz.
   app.use(json({ limit: '50kb' }));
   app.use(urlencoded({ extended: true, limit: '50kb' }));
 
   // 4. KURUMSAL CORS AYARI: 
-  // Dinamik olarak .env dosyasından beslenir.
   app.enableCors({
     // Eğer prod ortamındaysak sadece .env'deki domain, değilsek local ortamlar
     origin: nodeEnv === 'production' 
@@ -35,20 +52,24 @@ async function bootstrap() {
       : ['http://localhost:3000', 'http://localhost:5173', 'http://localhost:8080'], 
     
     methods: 'GET,HEAD,PUT,PATCH,POST,DELETE',
-    credentials: true, // JWT'yi cookie üzerinden yönetmek istersen bu kritik
+    credentials: true, 
     allowedHeaders: 'Content-Type, Accept, Authorization',
   });
 
   // Enterprise Validasyon Ayarı
   app.useGlobalPipes(
     new ValidationPipe({
-      whitelist: true, // DTO'da olmayan fazlalık verileri otomatik siler (Güvenlik)
-      forbidNonWhitelisted: true, // Fazla veri gelirse hata fırlatır
-      transform: true, // Gelen veriyi otomatik DTO sınıfına çevirir
+      whitelist: true, 
+      forbidNonWhitelisted: true, 
+      transform: true, 
     }),
   );
 
-  // Global Prefix (api/v1/auth/login şeklinde erişim sağlar)
+  // --- GRACEFUL SHUTDOWN (YENİ) ---
+  // Sunucu kapanırken (CTRL+C) açık bağlantıları bekler, işlemleri yarım bırakmaz.
+  app.enableShutdownHooks();
+
+  // Global Prefix 
   app.setGlobalPrefix('api/v1');
 
   await app.listen(3000);
