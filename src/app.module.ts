@@ -13,7 +13,7 @@ import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
 import { APP_GUARD } from '@nestjs/core';
 import { envValidationSchema } from './config/env.validation';
 import { HealthModule } from './health/health.module';
-import { ThrottlerStorageRedisService } from 'nestjs-throttler-storage-redis';
+// SILINDI: Redis storage importu kaldırıldı.
 
 @Module({
   imports: [
@@ -47,32 +47,12 @@ import { ThrottlerStorageRedisService } from 'nestjs-throttler-storage-redis';
       }),
     }),
 
-    // GÜVENLİK: Redis Destekli İstek Sınırlandırma (Rate Limiting)
-    // InMemory yerine Redis kullanarak sunucu restart olsa bile limitleri koruruz.
-    ThrottlerModule.forRootAsync({
-      imports: [ConfigModule],
-      inject: [ConfigService],
-      useFactory: (config: ConfigService) => ({
-        throttlers: [
-          {
-            name: 'default', // Genel endpointler için
-            ttl: 60000,      // 60 saniye
-            limit: 100,      // 100 istek
-          },
-          {
-            name: 'auth',    // Login/Register gibi hassas endpointler için
-            ttl: 60000,      // 60 saniye
-            limit: 5,        // SADECE 5 İSTEK
-          }
-        ],
-        // Redis Bağlantı Ayarı
-        storage: new ThrottlerStorageRedisService({
-          host: config.get('REDIS_HOST') || 'localhost',
-          port: config.get('REDIS_PORT') || 6379,
-          // password: config.get('REDIS_PASSWORD'), 
-        }),
-      }),
-    }),
+    // GÜVENLİK: İstek Sınırlandırma (Rate Limiting) - Basit Mod
+    // Redis bağlantı sorunları nedeniyle geçici olarak In-Memory kullanıyoruz.
+    ThrottlerModule.forRoot([{
+      ttl: 60000, // 1 dakika
+      limit: 10,  // 10 istek hakkı
+    }]),
 
     // 3. En son Feature Modüller yüklenmeli
     CommonModule,
