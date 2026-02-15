@@ -1,30 +1,35 @@
-import * as crypto from 'crypto'; // En üste eklendi (Node.js yerleşik modülü)
+import * as crypto from 'crypto';
 import {
   Injectable,
   UnauthorizedException,
   ForbiddenException,
   InternalServerErrorException,
-  BadRequestException, // <-- EKLENDİ
+  BadRequestException,
+  Logger, // <-- Logger eklendi
 } from '@nestjs/common';
+import { Cron, CronExpression } from '@nestjs/schedule'; // <-- Cron importları eklendi
 import { JwtService } from '@nestjs/jwt';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Repository, LessThan } from 'typeorm'; // <-- LessThan eklendi
 import * as argon2 from 'argon2';
-import { v7 as uuidv7 } from 'uuid'; // Session ID ve Token Family için
+import { v7 as uuidv7 } from 'uuid';
 import { UAParser } from 'ua-parser-js';
 
 import { UserEntity, AccountStatus } from '../users/entities/user.entity';
 import { SessionEntity } from './entities/session.entity';
-import { OutboxEntity, OutboxStatus } from '../outbox/entities/outbox.entity'; 
+import { OutboxEntity, OutboxStatus } from '../outbox/entities/outbox.entity';
 import { LoginDto } from '../auth/dto/login.dto';
-import { RefreshTokenDto } from './dto/refresh-token.dto'; 
-import { ForgotPasswordDto } from './dto/forgot-password.dto'; 
-import { ResetPasswordDto } from './dto/reset-password.dto'; 
-import { Verify2FaDto } from './dto/verify-2fa.dto'; 
-import { VerifyEmailDto } from './dto/verify-email.dto'; 
+import { RefreshTokenDto } from './dto/refresh-token.dto';
+import { ForgotPasswordDto } from './dto/forgot-password.dto';
+import { ResetPasswordDto } from './dto/reset-password.dto';
+import { Verify2FaDto } from './dto/verify-2fa.dto';
+import { VerifyEmailDto } from './dto/verify-email.dto';
 
 @Injectable()
 export class AuthService {
+  // Cron işlemleri için Logger tanımladık
+  private readonly logger = new Logger(AuthService.name);
+
   constructor(
     @InjectRepository(UserEntity)
     private readonly userRepository: Repository<UserEntity>,
@@ -39,7 +44,6 @@ export class AuthService {
     const { identifier, password } = loginDto;
 
     // 1. KULLANICIYI BUL (Email VEYA Username ile)
-    // TypeORM QueryBuilder kullanarak "OR" sorgusu atıyoruz.
     const user = await this.userRepository
       .createQueryBuilder('user')
       .addSelect('user.password_hash') // Şifre default hidden, burada lazım
@@ -49,7 +53,6 @@ export class AuthService {
       .getOne();
 
     // 2. GÜVENLİK: Kullanıcı yoksa bile "hata" hemen dönülmemeli (Timing Attack önlemi)
-    // Ancak Argon2 zaten yavaş olduğu için burada fake bir işlem yapmaya gerek yok.
     if (!user) {
       throw new UnauthorizedException('Giriş bilgileri hatalı.');
     }
@@ -64,18 +67,20 @@ export class AuthService {
     if (user.account_status === AccountStatus.SUSPENDED) {
       throw new ForbiddenException('Hesabınız askıya alınmıştır.');
     }
-    
-    // YENİ EKLENEN KISIM: Doğrulanmamış hesapları kapıdan çevir
+
+    // Doğrulanmamış hesapları kapıdan çevir
     if (user.account_status === AccountStatus.UNVERIFIED) {
-      throw new ForbiddenException('Lütfen önce e-posta adresinize gönderilen linke tıklayarak hesabınızı doğrulayın.');
+      throw new ForbiddenException(
+        'Lütfen önce e-posta adresinize gönderilen linke tıklayarak hesabınızı doğrulayın.',
+      );
     }
 
     // --- 2FA KONTROLÜ (ENTERPRISE MANTIĞI) ---
     if (user.two_factor_enabled) {
       // 1. 6 Haneli Rastgele Kod Üret
-      const otpCode = Math.floor(100000 + Math.random() * 900000).toString(); // Örn: "482915"
+      const otpCode = Math.floor(100000 + Math.random() * 900000).toString();
 
-      // 2. Kodu Hashle (SHA256, kısa ömürlü olduğu için yeterli ve hızlıdır)
+      // 2. Kodu Hashle (SHA256)
       const otpHash = crypto.createHash('sha256').update(otpCode).digest('hex');
 
       // 3. Veritabanına kaydet (Ömrü: 3 Dakika)
@@ -93,10 +98,9 @@ export class AuthService {
       // 5. Geçici "Pending Token" Üret (Ömrü 5 Dakika)
       const pendingToken = this.jwtService.sign(
         { sub: user.id, type: '2FA_PENDING' },
-        { expiresIn: '5m' }
+        { expiresIn: '5m' },
       );
 
-      // ASIL TOKENLARI VERME, SADECE BEKLEME JETONUNU VER
       return {
         message: 'Güvenlik kodu e-posta adresinize gönderildi.',
         requires2FA: true,
@@ -105,7 +109,6 @@ export class AuthService {
     }
 
     // --- 2FA KAPALIYSA NORMAL AKIŞA DEVAM ET ---
-    // 5. SESSION VE TOKEN OLUŞTURMA
     return this.createSession(user, userAgent, ipAddress);
   }
 
@@ -113,9 +116,9 @@ export class AuthService {
     const { pendingToken, code } = verify2FaDto;
 
     try {
-      // 1. Pending Token'ı Doğrula (Süresi geçmiş mi? Gerçekten 2FA token'ı mı?)
+      // 1. Pending Token'ı Doğrula
       const payload = this.jwtService.verify(pendingToken);
-      
+
       if (payload.type !== '2FA_PENDING') {
         throw new UnauthorizedException('Geçersiz token tipi.');
       }
@@ -123,34 +126,49 @@ export class AuthService {
       // 2. Kullanıcıyı ve Hashlenmiş Kodu Çek
       const user = await this.userRepository.findOne({
         where: { id: payload.sub },
-        select: ['id', 'email', 'username', 'two_factor_otp_hash', 'two_factor_otp_expires_at'],
+        select: [
+          'id',
+          'email',
+          'username',
+          'two_factor_otp_hash',
+          'two_factor_otp_expires_at',
+        ],
       });
 
       if (!user) {
         throw new UnauthorizedException('Kullanıcı bulunamadı.');
       }
 
-      // 3. Kodun Süresi Dolmuş mu? (TS 'Object is possibly null' hatası önlemi eklendi)
-      if (!user.two_factor_otp_expires_at || user.two_factor_otp_expires_at.getTime() < Date.now()) {
-        throw new UnauthorizedException('Güvenlik kodunun süresi dolmuş. Lütfen tekrar giriş yapın.');
+      // 3. Kodun Süresi Dolmuş mu?
+      if (
+        !user.two_factor_otp_expires_at ||
+        user.two_factor_otp_expires_at.getTime() < Date.now()
+      ) {
+        throw new UnauthorizedException(
+          'Güvenlik kodunun süresi dolmuş. Lütfen tekrar giriş yapın.',
+        );
       }
 
       // 4. Gelen Kodu Hashle ve Karşılaştır
-      const hashedInputCode = crypto.createHash('sha256').update(code).digest('hex');
+      const hashedInputCode = crypto
+        .createHash('sha256')
+        .update(code)
+        .digest('hex');
       if (user.two_factor_otp_hash !== hashedInputCode) {
         throw new UnauthorizedException('Hatalı güvenlik kodu.');
       }
 
-      // 5. BAŞARILI! Kodu Temizle (Tek kullanımlık olmasını garanti altına al)
-      user.two_factor_otp_hash = null; 
-      user.two_factor_otp_expires_at = null; 
+      // 5. BAŞARILI! Kodu Temizle
+      user.two_factor_otp_hash = null;
+      user.two_factor_otp_expires_at = null;
       await this.userRepository.save(user);
 
       // 6. Artık Gerçek Oturumu Başlatabiliriz
       return this.createSession(user, userAgent, ip);
-
     } catch (error) {
-      throw new UnauthorizedException('Doğrulama başarısız veya kodun süresi dolmuş.');
+      throw new UnauthorizedException(
+        'Doğrulama başarısız veya kodun süresi dolmuş.',
+      );
     }
   }
 
@@ -161,34 +179,33 @@ export class AuthService {
 
     // 2. ENTERPRISE KURALI: 2FA açıldıysa acımadan tüm oturumları patlat!
     if (enable) {
-      // Daha önce yazdığımız "Tüm Cihazlardan Çıkış Yap" metodunu tetikliyoruz
       await this.logoutAllDevices(userId);
-      
-      return { 
-        message: 'İki aşamalı doğrulama AKTİF edildi. Güvenliğiniz için tüm oturumlarınız kapatıldı. Lütfen e-postanıza gelecek kod ile tekrar giriş yapın.' 
+
+      return {
+        message:
+          'İki aşamalı doğrulama AKTİF edildi. Güvenliğiniz için tüm oturumlarınız kapatıldı. Lütfen e-postanıza gelecek kod ile tekrar giriş yapın.',
       };
     }
 
     return { message: 'İki aşamalı doğrulama KAPATILDI.' };
   }
 
-  async refreshToken(refreshTokenDto: RefreshTokenDto, ip: string, userAgent: string) {
+  async refreshToken(
+    refreshTokenDto: RefreshTokenDto,
+    ip: string,
+    userAgent: string,
+  ) {
     const { refreshToken } = refreshTokenDto;
 
     try {
-      // 1. Token'ı çöz (Süresi dolmuş mu, geçerli mi?)
-      // secret'ı configService'den aldığını varsayıyorum, eğer constructor'da configService yoksa eklemelisin.
-      const payload = this.jwtService.verify(refreshToken, {
-         // Eğer JWT modülüne default secret verdiysen burayı boş bırakabilirsin, 
-         // vermediysen { secret: process.env.JWT_SECRET } yazabilirsin.
-      });
-
+      // 1. Token'ı çöz
+      const payload = this.jwtService.verify(refreshToken);
       const { sub: userId, family: tokenFamily } = payload;
 
-      // 2. Veritabanında bu Session'ı bul (Token Family'ye göre)
+      // 2. Veritabanında bu Session'ı bul
       const session = await this.sessionRepository.findOne({
         where: { token_family: tokenFamily, user_id: userId },
-        relations: ['user'], // Yeni token üretirken user bilgileri gerekecek
+        relations: ['user'],
       });
 
       if (!session) {
@@ -200,51 +217,57 @@ export class AuthService {
       }
 
       // 3. HASH KONTROLÜ VE REUSE DETECTION (HIRSIZLIK KORUMASI)
-      const isCurrentToken = await argon2.verify(session.refresh_token_hash, refreshToken);
+      const isCurrentToken = await argon2.verify(
+        session.refresh_token_hash,
+        refreshToken,
+      );
 
       if (!isCurrentToken) {
-        // Eğer gelen token CURRENT (mevcut) değilse, ya hırsızlıktır ya da network gecikmesidir (Race Condition).
-        
-        const isPreviousToken = session.previous_refresh_token_hash 
-          ? await argon2.verify(session.previous_refresh_token_hash, refreshToken) 
+        // Reuse Detection: Çalınmış token kullanımı tespiti
+        const isPreviousToken = session.previous_refresh_token_hash
+          ? await argon2.verify(session.previous_refresh_token_hash, refreshToken)
           : false;
 
         if (isPreviousToken && session.rotated_at) {
-          // GRACE PERIOD KONTROLÜ: Token daha yeni mi değişti? (Örn: Son 20 saniye içinde)
-          const gracePeriodMs = 20 * 1000; // 20 saniye tolerans
+          // GRACE PERIOD KONTROLÜ (20 Saniye)
+          const gracePeriodMs = 20 * 1000;
           const timeSinceRotation = Date.now() - session.rotated_at.getTime();
 
           if (timeSinceRotation <= gracePeriodMs) {
-             // Ağ gecikmesi olmuş. Frontend 2 kere istek atmış. 
-             // Mevcut olan SAĞLAM tokenları bozmadan aynen geri dönüyoruz.
-             // (Bu noktada yeni token üretmiyoruz, son üretileni kurtarmaya çalışıyoruz veya tekrar login olmasını istiyoruz.
-             // En güvenlisi bu durumda hata fırlatıp tekrar login yapmasını istemek veya tolerans göstermektir.
-             // Biz şimdilik "Eski isteği reddet, geçerli token sende var zaten" mantığıyla ilerliyoruz).
-             throw new UnauthorizedException('Ağ gecikmesi tespit edildi. İşlem reddedildi.');
+            throw new UnauthorizedException(
+              'Ağ gecikmesi tespit edildi. İşlem reddedildi.',
+            );
           }
         }
 
-        // EĞER BURAYA DÜŞTÜYSE: Tolerans süresi geçmiş ve eski bir token kullanılmıştır. = HIRSIZLIK!
-        console.warn(`[GÜVENLİK İHLALİ] Çalınmış token kullanımı tespiti! User: ${userId}, Family: ${tokenFamily}`);
-        
-        // Ceza: Bu ailenin tüm oturumunu patlat (Revoke)
+        // Hırsızlık: Ailenin tüm oturumunu patlat
+        console.warn(
+          `[GÜVENLİK İHLALİ] Çalınmış token kullanımı tespiti! User: ${userId}, Family: ${tokenFamily}`,
+        );
         session.is_revoked = true;
         await this.sessionRepository.save(session);
-        
-        // Log tablosuna yazılabilir (İlerideki adım).
-        throw new UnauthorizedException('Güvenlik ihlali algılandı. Lütfen tekrar giriş yapın.');
+
+        throw new UnauthorizedException(
+          'Güvenlik ihlali algılandı. Lütfen tekrar giriş yapın.',
+        );
       }
 
-      // 4. NORMAL AKIŞ: TOKEN ROTATION (Döndürme)
-      // Token doğru. Şimdi yeni bir çift üretelim.
-      const newPayload = { sub: userId, email: session.user.email, family: tokenFamily };
-      
-      const newAccessToken = this.jwtService.sign(newPayload, { expiresIn: '15m' });
-      const newRefreshToken = this.jwtService.sign(newPayload, { expiresIn: '7d' });
-      
+      // 4. NORMAL AKIŞ: TOKEN ROTATION
+      const newPayload = {
+        sub: userId,
+        email: session.user.email,
+        family: tokenFamily,
+      };
+
+      const newAccessToken = this.jwtService.sign(newPayload, {
+        expiresIn: '15m',
+      });
+      const newRefreshToken = this.jwtService.sign(newPayload, {
+        expiresIn: '7d',
+      });
       const newRefreshTokenHash = await argon2.hash(newRefreshToken);
 
-      // Session'ı Güncelle (Eski token'ı previous'a alıyoruz, yenisini kaydediyoruz)
+      // Session'ı Güncelle
       session.previous_refresh_token_hash = session.refresh_token_hash;
       session.refresh_token_hash = newRefreshTokenHash;
       session.rotated_at = new Date();
@@ -252,15 +275,15 @@ export class AuthService {
       session.ip_address = ip;
       session.user_agent = userAgent;
 
-      // --- YENİ: User-Agent Parçalama ---
+      // Cihaz Bilgisini Güncelle (UA Parser)
       const parser = new UAParser(userAgent);
       const uaResult = parser.getResult();
 
       session.device_info = {
         browser: `${uaResult.browser.name || 'Bilinmeyen Tarayıcı'} ${uaResult.browser.version || ''}`.trim(),
         os: `${uaResult.os.name || 'Bilinmeyen İşletim Sistemi'} ${uaResult.os.version || ''}`.trim(),
-        device: uaResult.device.model 
-          ? `${uaResult.device.vendor || ''} ${uaResult.device.model}`.trim() 
+        device: uaResult.device.model
+          ? `${uaResult.device.vendor || ''} ${uaResult.device.model}`.trim()
           : 'Masaüstü Cihaz',
         type: uaResult.device.type || 'desktop',
       };
@@ -271,25 +294,29 @@ export class AuthService {
         accessToken: newAccessToken,
         refreshToken: newRefreshToken,
       };
-
     } catch (error) {
-      throw new UnauthorizedException('Refresh token geçersiz veya süresi dolmuş.');
+      throw new UnauthorizedException(
+        'Refresh token geçersiz veya süresi dolmuş.',
+      );
     }
   }
 
-  private async createSession(user: UserEntity, userAgent: string, ip: string) {
+  private async createSession(
+    user: UserEntity,
+    userAgent: string,
+    ip: string,
+  ) {
     const tokenFamily = uuidv7();
 
-    // --- YENİ: User-Agent Parçalama ---
+    // User-Agent Parçalama
     const parser = new UAParser(userAgent);
     const uaResult = parser.getResult();
 
-    // Kullanıcı dostu cihaz bilgisi oluşturuyoruz
     const deviceInfo = {
       browser: `${uaResult.browser.name || 'Bilinmeyen Tarayıcı'} ${uaResult.browser.version || ''}`.trim(),
       os: `${uaResult.os.name || 'Bilinmeyen İşletim Sistemi'} ${uaResult.os.version || ''}`.trim(),
-      device: uaResult.device.model 
-        ? `${uaResult.device.vendor || ''} ${uaResult.device.model}`.trim() 
+      device: uaResult.device.model
+        ? `${uaResult.device.vendor || ''} ${uaResult.device.model}`.trim()
         : 'Masaüstü Cihaz',
       type: uaResult.device.type || 'desktop',
     };
@@ -305,10 +332,7 @@ export class AuthService {
     session.refresh_token_hash = refreshTokenHash;
     session.token_family = tokenFamily;
     session.user_agent = userAgent;
-    
-    // --- YENİ: Parçalanmış veriyi JSONB alanına basıyoruz ---
-    session.device_info = deviceInfo;
-    
+    session.device_info = deviceInfo; // Parçalanmış veriyi basıyoruz
     session.ip_address = ip;
     session.expires_at = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000); // 7 Gün
 
@@ -331,20 +355,19 @@ export class AuthService {
     const { refreshToken } = refreshTokenDto;
 
     try {
-      // 1. Token'ı çöz (Doğrulama yapmıyoruz, sadece içindeki payload'u okuyoruz. 
-      // Çünkü token süresi dolmuş olsa bile çıkış yapabilmeli)
+      // Token'ı çöz
       const payload = this.jwtService.decode(refreshToken) as any;
 
       if (!payload || payload.sub !== userId) {
         throw new UnauthorizedException('Geçersiz token veya yetkisiz işlem.');
       }
 
-      // 2. İlgili Session'ı bul
+      // Session'ı bul
       const session = await this.sessionRepository.findOne({
         where: { token_family: payload.family, user_id: userId },
       });
 
-      // 3. Zaten iptal edilmemişse, İptal Et (Revoke)
+      // İptal Et (Revoke)
       if (session && !session.is_revoked) {
         session.is_revoked = true;
         await this.sessionRepository.save(session);
@@ -352,20 +375,19 @@ export class AuthService {
 
       return { message: 'Başarıyla çıkış yapıldı.' };
     } catch (error) {
-      throw new InternalServerErrorException('Çıkış işlemi sırasında bir hata oluştu.');
+      throw new InternalServerErrorException(
+        'Çıkış işlemi sırasında bir hata oluştu.',
+      );
     }
   }
 
-  // Bonus: Netflix/Google Tarzı "Tüm Cihazlardan Çıkış Yap"
+  // Tüm Cihazlardan Çıkış Yap
   async logoutAllDevices(userId: string) {
     try {
-      // Kullanıcıya ait, henüz iptal edilmemiş TÜM oturumları bul ve iptal et
       await this.sessionRepository.update(
         { user_id: userId, is_revoked: false },
-        { is_revoked: true }
+        { is_revoked: true },
       );
-
-      // İsteğe bağlı: Burada AuditLog tablosuna "Tüm cihazlardan çıkış yapıldı" logu düşülebilir.
 
       return { message: 'Tüm cihazlardan başarıyla çıkış yapıldı.' };
     } catch (error) {
@@ -379,71 +401,84 @@ export class AuthService {
     const { email } = forgotPasswordDto;
     const user = await this.userRepository.findOne({ where: { email } });
 
-    // GÜVENLİK KURALI: Kullanıcı olmasa bile HATA VERME! 
-    // "Böyle bir mail yok" demek, kötü niyetli kişilerin sistemdeki mailleri taramasını sağlar (Enumeration Attack).
+    // Kullanıcı yoksa bile hata dönmüyoruz (Enumeration Attack)
     if (!user) {
-      return { message: 'Eğer bu e-posta sistemde kayıtlıysa, şifre sıfırlama bağlantısı gönderilmiştir.' };
+      return {
+        message:
+          'Eğer bu e-posta sistemde kayıtlıysa, şifre sıfırlama bağlantısı gönderilmiştir.',
+      };
     }
 
-    // 1. Kriptografik Rastgele Token Üret
-    const resetToken = crypto.randomBytes(32).toString('hex'); // Kullanıcıya maille gidecek temiz token
-    
-    // 2. Token'ı Hashle (Veritabanında güvenle saklamak için)
-    const resetTokenHash = crypto.createHash('sha256').update(resetToken).digest('hex');
+    // 1. Rastgele Token
+    const resetToken = crypto.randomBytes(32).toString('hex');
+    const resetTokenHash = crypto
+      .createHash('sha256')
+      .update(resetToken)
+      .digest('hex');
 
-    // 3. Kullanıcıya kaydet (Ömrü: 1 Saat)
+    // 2. Kullanıcıya kaydet
     user.password_reset_hash = resetTokenHash;
     user.password_reset_expires_at = new Date(Date.now() + 60 * 60 * 1000);
     await this.userRepository.save(user);
 
-    // 4. Outbox'a Mail Emri Yaz (Dual Write - Güvenli)
+    // 3. Outbox'a Mail Emri
     const outboxEvent = new OutboxEntity();
     outboxEvent.type = 'PASSWORD_RESET_REQUESTED';
     outboxEvent.payload = {
       email: user.email,
-      // URL frontend'in adresi olmalı. Biz şimdilik örnek veriyoruz.
       resetLink: `https://senin-frontend.com/reset-password?token=${resetToken}`,
     };
     outboxEvent.status = OutboxStatus.PENDING;
-    // Not: Outbox kaydı için this.dataSource.manager veya ayrı bir repository çağırman gerekebilir.
-    // constructor'a @InjectRepository(OutboxEntity) private readonly outboxRepository: Repository<OutboxEntity> eklemelisin.
     await this.outboxRepository.save(outboxEvent);
-    // Geçici çözüm: transaction olmadan hızlıca kaydediyoruz (Aslında outbox service üzerinden gitmek daha iyidir)
-    // AuthModule imports kısmına OutboxEntity'yi eklemeyi unutma!
 
-    return { message: 'Eğer bu e-posta sistemde kayıtlıysa, şifre sıfırlama bağlantısı gönderilmiştir.' };
+    return {
+      message:
+        'Eğer bu e-posta sistemde kayıtlıysa, şifre sıfırlama bağlantısı gönderilmiştir.',
+    };
   }
 
   async resetPassword(resetPasswordDto: ResetPasswordDto) {
     const { token, newPassword } = resetPasswordDto;
 
-    // 1. Gelen token'ı aynı yöntemle hashle
     const hashedToken = crypto.createHash('sha256').update(token).digest('hex');
 
-    // 2. Veritabanında bu hash'i ve süresi geçmemiş kaydı bul
     const user = await this.userRepository.findOne({
       where: { password_reset_hash: hashedToken },
-      select: ['id', 'password_hash', 'password_reset_expires_at', 'security_stamp'],
+      select: [
+        'id',
+        'password_hash',
+        'password_reset_expires_at',
+        'security_stamp',
+      ],
     });
 
-    if (!user || !user.password_reset_expires_at || user.password_reset_expires_at.getTime() < Date.now()) {
-      throw new UnauthorizedException('Şifre sıfırlama bağlantısı geçersiz veya süresi dolmuş.');
+    if (
+      !user ||
+      !user.password_reset_expires_at ||
+      user.password_reset_expires_at.getTime() < Date.now()
+    ) {
+      throw new UnauthorizedException(
+        'Şifre sıfırlama bağlantısı geçersiz veya süresi dolmuş.',
+      );
     }
 
-    // 3. Yeni şifreyi Argon2 ile hashle
+    // Yeni şifre
     user.password_hash = await argon2.hash(newPassword);
 
-    // 4. GÜVENLİK: Şifre değişti, eski oturumları patlat!
-    user.password_reset_hash = null; 
-    user.password_reset_expires_at = null; 
-    user.security_stamp = uuidv7(); // Bu değiştiğinde tüm mevcut tokenlar geçersiz hale gelir!
+    // Temizlik ve Güvenlik Damgası
+    user.password_reset_hash = null;
+    user.password_reset_expires_at = null;
+    user.security_stamp = uuidv7();
 
     await this.userRepository.save(user);
 
-    // 5. Session tablosundaki açık oturumları Revoke et (Güvenli Çıkış metodu)
+    // Diğer oturumları kapat
     await this.logoutAllDevices(user.id);
 
-    return { message: 'Şifreniz başarıyla güncellendi. Yeni şifrenizle giriş yapabilirsiniz.' };
+    return {
+      message:
+        'Şifreniz başarıyla güncellendi. Yeni şifrenizle giriş yapabilirsiniz.',
+    };
   }
 
   // --- E-POSTA DOĞRULAMA İŞLEMİ ---
@@ -451,32 +486,61 @@ export class AuthService {
   async verifyEmail(verifyEmailDto: VerifyEmailDto) {
     const { token } = verifyEmailDto;
 
-    // 1. Gelen token'ı hashle
     const hashedToken = crypto.createHash('sha256').update(token).digest('hex');
 
-    // 2. Veritabanında ara
     const user = await this.userRepository.findOne({
       where: { email_verification_hash: hashedToken },
       select: ['id', 'account_status', 'email_verification_expires_at'],
     });
 
-    // 3. Token geçersiz mi veya süresi dolmuş mu? (TS hatası önlemi eklendi)
-    if (!user || !user.email_verification_expires_at || user.email_verification_expires_at.getTime() < Date.now()) {
-      throw new BadRequestException('Doğrulama bağlantısı geçersiz veya süresi dolmuş.');
+    if (
+      !user ||
+      !user.email_verification_expires_at ||
+      user.email_verification_expires_at.getTime() < Date.now()
+    ) {
+      throw new BadRequestException(
+        'Doğrulama bağlantısı geçersiz veya süresi dolmuş.',
+      );
     }
 
-    // Zaten onaylıysa
     if (user.account_status === AccountStatus.ACTIVE) {
       return { message: 'Hesabınız zaten doğrulanmış.' };
     }
 
-    // 4. KİLİDİ AÇ (ACTIVE yap) ve tokenları temizle
+    // Aktif et ve temizle
     user.account_status = AccountStatus.ACTIVE;
-    user.email_verification_hash = null; 
-    user.email_verification_expires_at = null; 
+    user.email_verification_hash = null;
+    user.email_verification_expires_at = null;
 
     await this.userRepository.save(user);
 
-    return { message: 'E-posta adresiniz başarıyla doğrulandı. Artık giriş yapabilirsiniz.' };
+    return {
+      message:
+        'E-posta adresiniz başarıyla doğrulandı. Artık giriş yapabilirsiniz.',
+    };
+  }
+
+  // --- CRON JOBS ---
+
+  // HER GECE SAAT 04:00'TE ÇALIŞIR
+  // Süresi dolmuş (Expired) ve İptal edilmiş (Revoked) sessionları temizler.
+  @Cron(CronExpression.EVERY_DAY_AT_4AM)
+  async handleCronSessionCleanup() {
+    this.logger.log(
+      '🧹 [CRON] Süresi dolmuş oturumları temizleme görevi başladı...',
+    );
+
+    const now = new Date();
+
+    const result = await this.sessionRepository.delete({
+      expires_at: LessThan(now), // Süresi geçmiş olanlar
+    });
+
+    // İsteğe bağlı: Revoked olanları da silebilirsin ama güvenlik analizi için
+    // 30 gün tutmak isteyebilirsin. O yüzden şimdilik sadece süresi bitenleri siliyoruz.
+
+    this.logger.log(
+      `🗑️ [CRON] Temizlik tamamlandı. Silinen oturum sayısı: ${result.affected}`,
+    );
   }
 }

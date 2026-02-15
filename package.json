@@ -17,7 +17,11 @@
     "test:watch": "jest --watch",
     "test:cov": "jest --coverage",
     "test:debug": "node --inspect-brk -r tsconfig-paths/register -r ts-node/register node_modules/.bin/jest --runInBand",
-    "test:e2e": "jest --config ./test/jest-e2e.json"
+    "test:e2e": "jest --config ./test/jest-e2e.json",
+    "typeorm": "typeorm-ts-node-commonjs",
+    "migration:generate": "npm run typeorm -- -d ./data-source.ts migration:generate ./src/migrations/$npm_config_name",
+    "migration:run": "npm run typeorm -- migration:run -d ./data-source.ts",
+    "migration:revert": "npm run typeorm -- migration:revert -d ./data-source.ts"
   },
   "dependencies": {
     "@nestjs/axios": "^4.0.1",
@@ -40,7 +44,10 @@
     "compression": "^1.8.1",
     "helmet": "^8.1.0",
     "hpp": "^0.2.3",
+    "ioredis": "^5.9.3",
     "joi": "^18.0.2",
+    "nest-winston": "^1.10.2",
+    "nestjs-throttler-storage-redis": "^0.5.1",
     "passport": "^0.7.0",
     "passport-jwt": "^4.0.1",
     "pg": "^8.18.0",
@@ -49,7 +56,8 @@
     "swagger-ui-express": "^5.0.1",
     "typeorm": "^0.3.28",
     "ua-parser-js": "^2.0.9",
-    "uuid": "^13.0.0"
+    "uuid": "^13.0.0",
+    "winston": "^3.19.0"
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3.2.0",

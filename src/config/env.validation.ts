@@ -24,4 +24,8 @@ export const envValidationSchema = Joi.object({
   FRONTEND_URL: Joi.string().required().messages({
     'any.required': 'HATA: "FRONTEND_URL" (CORS için) tanımlanmamış!',
   }),
+
+  // Redis Kuralları
+  REDIS_HOST: Joi.string().required(),
+  REDIS_PORT: Joi.number().default(6379),
 });

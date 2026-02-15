@@ -1,0 +1,56 @@
+version: '3.8'
+
+services:
+  # --- 1. BACKEND SERVİSİ ---
+  app:
+    container_name: login_backend_app
+    build: .
+    ports:
+      - "3000:3000"
+    environment:
+      # Docker içinde host isimleri servis ismidir!
+      - NODE_ENV=production
+      - DB_HOST=postgres  # Servis adı 'postgres' olduğu için
+      - REDIS_HOST=redis  # Servis adı 'redis' olduğu için
+      # Diğer kritik ayarları .env dosyasından okuyacak
+    env_file:
+      - .env
+    depends_on:
+      - postgres
+      - redis
+    restart: always
+    networks:
+      - app-network
+
+  # --- 2. VERİTABANI (PostgreSQL) ---
+  postgres:
+    container_name: login_backend_db
+    image: postgres:15-alpine
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: ${DB_USERNAME} # .env dosyasından okur
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: ${DB_NAME}
+    volumes:
+      - ./postgres_data:/var/lib/postgresql/data # Veriler kaybolmasın diye klasöre bağladık
+    restart: always
+    networks:
+      - app-network
+
+  # --- 3. CACHE & RATE LIMIT (Redis) ---
+  redis:
+    container_name: login_backend_redis
+    image: redis:alpine
+    ports:
+      - "6379:6379"
+    command: redis-server --save 60 1 --loglevel warning # Kalıcılık ayarı
+    volumes:
+      - ./redis_data:/data
+    restart: always
+    networks:
+      - app-network
+
+networks:
+  app-network:
+    driver: bridge
