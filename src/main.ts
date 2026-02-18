@@ -65,7 +65,7 @@ async function bootstrap() {
   app.enableCors({
     origin: nodeEnv === 'production' 
       ? [frontendUrl] 
-      : ['http://localhost:3000', 'http://localhost:5173', 'http://localhost:8080'], 
+      : ['http://localhost:3000', 'http://localhost:5173', 'http://localhost:8080','http://localhost:3001'], 
     
     methods: 'GET,HEAD,PUT,PATCH,POST,DELETE',
     credentials: true, 

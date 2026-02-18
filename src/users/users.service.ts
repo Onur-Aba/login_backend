@@ -34,6 +34,15 @@ export class UsersService {
 
       // 1. Doğrulama Token'ı Üret (24 saat geçerli)
       const verificationToken = crypto.randomBytes(32).toString('hex');
+
+      // 👇 --- TEST İÇİN KONSOLA YAZDIRIYORUZ --- 👇
+      console.log(`\n======================================================`);
+      console.log(`🚀 [TEST/DEV] YENİ KAYIT: ${user.email}`);
+      console.log(`🔑 DOĞRULAMA TOKENI (Postman'e Kopyala):`);
+      console.log(verificationToken);
+      console.log(`======================================================\n`);
+      // 👆 ------------------------------------------ 👆
+
       const verificationTokenHash = crypto
         .createHash('sha256')
         .update(verificationToken)

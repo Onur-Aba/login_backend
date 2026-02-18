@@ -10,53 +10,83 @@ export class RecaptchaGuard implements CanActivate {
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
     const request = context.switchToHttp().getRequest();
-    const { recaptchaToken } = request.body;
+    const { recaptchaToken, identifier, email } = request.body;
     
-    // IP Adresini al (Proxy arkasındaysan x-forwarded-for, yoksa socket ip)
-    const clientIp = request.headers['x-forwarded-for'] || request.socket.remoteAddress;
-
-    // 1. TEST ORTAMI BYPASS (Geliştirme yaparken bizi yormasın)
-    const isDev = this.configService.get('NODE_ENV') === 'development';
-    if (isDev && recaptchaToken === 'TEST_TOKEN') {
-      this.logger.debug('Test ortamı için Recaptcha bypass edildi.');
-      return true;
+    // IP adresini temiz bir şekilde alalım (Baştaki olası boşlukları vb. temizleyelim)
+    let clientIp = request.headers['x-forwarded-for'] || request.socket.remoteAddress;
+    if (typeof clientIp === 'string') {
+        clientIp = clientIp.split(',')[0].trim();
     }
 
-    if (!recaptchaToken) {
-      throw new ForbiddenException('Güvenlik doğrulaması (Captcha) eksik.');
+    // 1. RİSK MOTORU ÇALIŞIYOR (Artık asenkron bir istek olduğu için başına 'await' ekledik)
+    const isSuspicious = await this.checkIfSuspicious(clientIp, identifier || email);
+
+    // 2. KULLANICI TEMİZSE VE TOKEN YOKSA -> DİREKT GEÇİŞ!
+    if (!isSuspicious && !recaptchaToken) {
+      this.logger.log(`Temiz kullanıcı girişi: ${clientIp}`);
+      return true; 
     }
 
-    // 2. GOOGLE'A SOR (IP ADRESİNİ DE GÖNDERİYORUZ!)
-    const secretKey = this.configService.get('RECAPTCHA_SECRET_KEY');
+    // 3. KULLANICI ŞÜPHELİYSE AMA TOKEN GÖNDERMEMİŞSE -> FRONTEND'İ UYAR!
+    if (isSuspicious && !recaptchaToken) {
+      this.logger.warn(`Şüpheli işlem saptandı, Captcha istendi: ${clientIp}`);
+      throw new ForbiddenException({
+        message: 'Şüpheli işlem tespit edildi. Lütfen güvenlik doğrulamasını tamamlayın.',
+        code: 'CAPTCHA_REQUIRED' // Frontend bu kodu bekleyecek
+      });
+    }
+
+    // 4. KULLANICI TOKEN GÖNDERDİYSE -> GOOGLE'DAN DOĞRULA
+    const secretKey = this.configService.get<string>('RECAPTCHA_SECRET_KEY');
     
     try {
-      // Google API'sine remoteip parametresini eklemek VPN tespitini güçlendirir.
-      const response = await axios.post(
-        `https://www.google.com/recaptcha/api/siteverify`,
-        null,
-        {
-          params: {
-            secret: secretKey,
-            response: recaptchaToken,
-            remoteip: clientIp, // <-- Kritik Nokta: Google'a IP'yi ispiyonluyoruz
-          },
-        }
-      );
+      const response = await axios.post(`https://www.google.com/recaptcha/api/siteverify`, null, {
+        params: { secret: secretKey, response: recaptchaToken, remoteip: clientIp },
+      });
 
-      const { success, score, action } = response.data;
-
-      // 3. SKOR KONTROLÜ
-      // 1.0 = İnsan, 0.0 = Bot
-      // 0.5 altı genelde şüphelidir (VPN veya Bot).
-      if (!success || score < 0.5) {
-        this.logger.warn(`Bot aktivitesi engellendi! IP: ${clientIp}, Skor: ${score}`);
-        throw new ForbiddenException('Şüpheli trafik algılandı. Lütfen VPN kapatıp tekrar deneyin.');
+      if (!response.data.success) {
+        throw new ForbiddenException('Güvenlik doğrulaması başarısız.');
       }
-
       return true;
     } catch (error) {
-      this.logger.error('Recaptcha servisine ulaşılamadı:', error);
-      throw new ForbiddenException('Güvenlik servisi şu an yanıt vermiyor.');
+      throw new ForbiddenException('Güvenlik servisine ulaşılamadı.');
     }
+  }
+
+  // --- KENDİ RİSK MANTIĞIN (Artık async çalışıyor) ---
+  private async checkIfSuspicious(ip: string, userIdentifier: string): Promise<boolean> {
+    
+    // 1. Statik Kural: Manuel belirlediğin şüpheli kelimeler
+    if (userIdentifier && userIdentifier.includes('bot')) {
+      return true; // Şüpheli!
+    }
+
+    // 2. Geliştirici (Localhost) Koruması
+    // Localhost IP'leri (127.0.0.1, ::1) dış API'lere gönderildiğinde hata fırlatır, bunu atlıyoruz.
+    if (ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1') {
+        return false;
+    }
+
+    // 3. Dinamik VPN ve Proxy Kontrolü
+    try {
+      // Not: proxycheck.io günde 1000 isteğe kadar ücretsiz ve keysiz çalışır.
+      // İleride kendi projen için IPQualityScore veya VPNAPI.io kullanabilirsin.
+      const response = await axios.get(`https://proxycheck.io/v2/${ip}?vpn=1&asn=1`);
+      
+      const ipData = response.data[ip];
+      
+      // Servis bu IP'nin VPN veya Proxy olduğunu onaylarsa
+      if (ipData && ipData.proxy === 'yes') {
+        this.logger.warn(`🛑 VPN/Proxy bağlantısı tespit edildi! IP: ${ip} (Firma: ${ipData.provider})`);
+        return true; // Şüpheli!
+      }
+      
+    } catch (error: any) {
+      // FAIL-OPEN PRENSİBİ: Eğer VPN kontrol API'si çökerse sistemi kilitleme, girişe izin ver.
+      this.logger.error(`VPN kontrol servisine erişilemedi: ${error.message}`);
+    }
+
+    // Hiçbir riske takılmayan normal kullanıcılar için temiz (false) dön.
+    return false;
   }
 }
