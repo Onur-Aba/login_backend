@@ -426,7 +426,7 @@ export class AuthService {
     outboxEvent.type = 'PASSWORD_RESET_REQUESTED';
     outboxEvent.payload = {
       email: user.email,
-      resetLink: `https://senin-frontend.com/reset-password?token=${resetToken}`,
+      resetLink: `https://http://localhost:3001/reset-password?token=${resetToken}`,
     };
     outboxEvent.status = OutboxStatus.PENDING;
     await this.outboxRepository.save(outboxEvent);
